@@ -12,7 +12,6 @@ from torchvision.utils import save_image
 import argparse
 from datetime import datetime
 import scipy.io as sio
-from pixelcnn import PixelCNN
 import logging
 import imp
 
@@ -33,17 +32,24 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     cuda = True if torch.cuda.is_available() else False
     print('!!! using {} !!!'.format(device))
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+
     Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
     
 
-    net = cf.net 
+    # net = torch.nn.DataParallel(cf.net)
+    net = cf.net
     net.to(device)
 
     def sigmoid_layer(x):
-        if cf.output_channels > 1:
+        if cf.output_channels > 1 and cf.use_sigmoid:
             return cf.train_dataset.switcher.color_mapping(torch.nn.functional.softmax(x, dim=1).argmax(dim=1))
-        else:
+        elif cf.use_sigmoid:
             return  torch.nn.functional.sigmoid(x)
+        else:
+            return x
+            
 
     def color_mapping(x):
         return cf.train_dataset.switcher.color_mapping(x[:,0,...])
@@ -172,8 +178,10 @@ if __name__ == '__main__':
                 for item in tmp_idx:
                     used_idx[item] = used_idx.get(item, 0) + 1
                 ### end just for inspection ###
-
-                loss_dict = net.loss(seg, mask)
+                if cf.use_l1loss:
+                    loss_dict = net.l1loss(seg, mask)
+                else:
+                    loss_dict = net.loss(seg, mask)
                 # print(loss_dict)
                 
                 if epoch >= cf.warm_up_epochs:
@@ -226,7 +234,7 @@ if __name__ == '__main__':
 
             #### validation ####
             with torch.no_grad():
-                if (epoch+1) % 100 == 0  or epoch in [0]:
+                if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2]:
                     net.eval()
 
                     avg_seg_loss.reset()
@@ -238,12 +246,13 @@ if __name__ == '__main__':
                     for tstep, batch in enumerate(val_loader):
                         # print('validating ...')
                         patch = batch['img'].to(device).type(Tensor)
-                        seg = batch['seg'].to(device).type(Tensor)
+                        ori_seg = batch['seg'].to(device).type(Tensor)
                         if 'mask' in batch.keys():
                             mask = batch['mask'].to(device).type(Tensor)
-                            seg = seg * mask
+                            seg = ori_seg * mask
                         else:
                             mask = None
+                            seg = ori_seg
 
                         net.forward(patch, seg, training=False)
                         loss_dict = net.loss(seg, mask)
@@ -258,17 +267,29 @@ if __name__ == '__main__':
                             used_idx[item] = used_idx.get(item, 0) + 1
                         
                         if cf.output_channels > 1:
-                            tmp = torch.cat([patch, color_mapping(seg), sigmoid_layer(net.recon_seg), sigmoid_layer(sample1), sigmoid_layer(sample2), sigmoid_layer(sample3)], dim=0)
+                            tmp = torch.cat([patch, color_mapping(ori_seg), sigmoid_layer(net.recon_seg), sigmoid_layer(sample1), sigmoid_layer(sample2), sigmoid_layer(sample3)], dim=0)
                         else:
-                            tmp = torch.cat([patch, seg, sigmoid_layer(net.recon_seg), sigmoid_layer(sample1), sigmoid_layer(sample2), sigmoid_layer(sample3)], dim=0)
+                            if patch.shape[1] > 1:
+                                tmp = torch.cat([patch, 
+                                    ori_seg.expand_as(patch), 
+                                    sigmoid_layer(net.recon_seg).expand_as(patch), 
+                                    sigmoid_layer(sample1).expand_as(patch), 
+                                    sigmoid_layer(sample2).expand_as(patch), 
+                                    sigmoid_layer(sample3).expand_as(patch)], dim=0)
+                            
+                            else:
+                                tmp = torch.cat([patch, ori_seg, sigmoid_layer(net.recon_seg), sigmoid_layer(sample1), sigmoid_layer(sample2), sigmoid_layer(sample3)], dim=0)
 
 
-                        save_image(tmp.data[:, :, :, :], pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
+                        save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
 
                         
                         avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
                         avg_code_loss.update(loss_dict['code_loss'].item(), 1)
                         avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
+
+                        if tstep >= 100 and cf.test_partial:
+                            break
                     
         
 
@@ -296,117 +317,120 @@ if __name__ == '__main__':
 
 
     def test():
-        check_point = cf.check_point
-        sample_num = cf.sample_num
+        with torch.no_grad():
+            torch.manual_seed(0)
+            check_point = cf.check_point
+            sample_num = cf.sample_num
 
-        name = 'test_'  + NAME + '_' + date_string
-        image_path = pjoin(base_path, 'images', name)
-        os.makedirs(image_path, exist_ok=True)
+            name = 'test_'  + NAME + '_' + date_string
+            image_path = pjoin(base_path, 'images', name)
+            os.makedirs(image_path, exist_ok=True)
 
-        logging.basicConfig(filename=image_path + '/LOG.txt',
-                            filemode='a',
-                            level=logging.INFO)
-        logging.getLogger().addHandler(logging.StreamHandler())
-        logging.info('-------------------------------')
-        with open(opt.config + '_config.py', "r") as f:
-            logging.info(f.read())
-        f.close()
-        logging.info('-------------------------------')
+            logging.basicConfig(filename=image_path + '/LOG.txt',
+                                filemode='a',
+                                level=logging.INFO)
+            logging.getLogger().addHandler(logging.StreamHandler())
+            logging.info('-------------------------------')
+            with open(opt.config + '_config.py', "r") as f:
+                logging.info(f.read())
+            f.close()
+            logging.info('-------------------------------')
 
-        # print(net.seg_criterion)
+            # print(net.seg_criterion)
 
-        model_path = pjoin(base_path, check_point)
-        checkpoint = torch.load(model_path, map_location='cpu')
-        test_bs = cf.test_bs
-        logging.info('using check point {} \n'.format(check_point))
-        
-        net._init_emb()
-        net.load_state_dict(checkpoint)
-        test_dataset = cf.test_dataset
-        test_loader = DataLoader(test_dataset, batch_size=test_bs, shuffle=False,
-            num_workers=4, pin_memory=True, sampler=None)
-        used_idx = dict()
-        logging.info('testing ... \n')
-
-        net.eval()
-        avg_seg_loss = AverageMeter()
-        avg_code_loss = AverageMeter()
-        avg_cls_loss = AverageMeter()
-
-        avg_seg_loss.reset()
-        avg_code_loss.reset()
-        avg_cls_loss.reset()
-        for tstep, batch in enumerate(test_loader):
-            # print('validating ...')
-            patch = batch['img'].to(device).type(Tensor)
-            seg = batch['seg'].to(device).type(Tensor)
-            if 'mask' in batch.keys():
-                mask = batch['mask'].to(device).type(Tensor)
-                seg = seg * mask
-            else:
-                mask = None
+            model_path = pjoin(base_path, check_point)
+            checkpoint = torch.load(model_path, map_location='cpu')
+            test_bs = cf.test_bs
+            logging.info('using check point {} \n'.format(check_point))
             
-            img_key = batch['img_key'][0].replace('/', '_').replace('.png', '')
+            net._init_emb()
+            net.load_state_dict(checkpoint)
+            test_dataset = cf.test_dataset
+            test_loader = DataLoader(test_dataset, batch_size=test_bs, shuffle=False,
+                num_workers=1, pin_memory=True, sampler=None, worker_init_fn= lambda _: torch.manual_seed(0))
+            used_idx = dict()
+            logging.info('testing ... \n')
 
+            net.eval()
+            avg_seg_loss = AverageMeter()
+            avg_code_loss = AverageMeter()
+            avg_cls_loss = AverageMeter()
 
-            net.forward(patch, seg, training=False)
-            # print('mask {}'.format(mask))
-            loss_dict = net.loss(seg, mask)
-
-            logging.info('batch #{} \n seg_loss {} \n  code_loss {} \n cls_loss {} \n '.format(tstep, loss_dict['seg_loss'], loss_dict['code_loss'], loss_dict['classification_loss']))
-            
-            idx = []
-            sample = []
-            prob = []
-            for sample_idx in range(sample_num):
-                if cf.top_k_sample: 
-                    sample_tmp, idx_tmp, prob_tmp = net.sample_topk(sample_idx+1)
+            avg_seg_loss.reset()
+            avg_code_loss.reset()
+            avg_cls_loss.reset()
+            for tstep, batch in enumerate(test_loader):
+                # print('validating ...')
+                patch = batch['img'].to(device).type(Tensor)
+                ori_seg = batch['seg'].to(device).type(Tensor)
+                if 'mask' in batch.keys():
+                    mask = batch['mask'].to(device).type(Tensor)
+                    seg = ori_seg * mask
                 else:
-                    sample_tmp, idx_tmp, prob_tmp = net.sample()
+                    mask = None
+                    seg = ori_seg
                 
-                
-                sample.append(sample_tmp)
-                prob.append(prob_tmp)
 
-                idx += list(idx_tmp.view(-1).cpu().numpy())
-                logging.info('sample_{}_prob {} \
-                            '.format(sample_idx, prob_tmp))
-            
-            for item in idx:
-                used_idx[item] = used_idx.get(item, 0) + 1
 
-            sample = torch.cat(sample, dim=0)
-            if cf.save_test_npy:
-                if cf.output_channels > 1:
-                    np.save(pjoin(image_path, "{}_{}sample_labelIds.npy".format(img_key, sample_num)), torch.nn.functional.softmax(sample, dim=1).argmax(dim=1).cpu().numpy())
-                else:
-                    sample = sigmoid_layer(sample) > 0.5
-                    np.save(pjoin(image_path, "{}_{}sample_labelIds.npy".format(img_key, sample_num)), sample.cpu().numpy())
+
+                net.forward(patch, seg, training=False)
+                # print('mask {}'.format(mask))
+                loss_dict = net.loss(seg, mask)
+
+                logging.info('batch #{} \n seg_loss {} \n  code_loss {} \n cls_loss {} \n '.format(tstep, loss_dict['seg_loss'], loss_dict['code_loss'], loss_dict['classification_loss']))
                 
-                np.save(pjoin(image_path, "{}_{}prob.npy".format(img_key, sample_num)), prob)
-            else: 
+                idx = []
+                sample = []
+                prob = []
+                code_ids = []
+                for sample_idx in range(sample_num):
+                    if cf.top_k_sample: 
+                        sample_tmp, idx_tmp, prob_tmp = net.sample_topk(sample_idx+1)
+                    else:
+                        sample_tmp, idx_tmp, prob_tmp = net.sample()
+                    
+                    
+                    sample.append(sample_tmp)
+                    prob.append(prob_tmp)
+                    code_ids.append(idx_tmp.item())
+
+                    del sample_tmp
+                    torch.cuda.empty_cache()
+
+                    idx += list(idx_tmp.view(-1).cpu().numpy())
+                    # logging.info('sample_{}: [code_id {}] [prob {}] \
+                                # '.format(sample_idx, idx_tmp, prob_tmp))
+
                 sample = torch.cat(sample, dim=0)
-                tmp = torch.cat([patch, sigmoid_layer(net.recon_seg), sigmoid_layer(sample)], dim=0)
-                save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=(tmp.shape[0]//(2+4+sample_num)), normalize=False)
+                
+                for item in idx:
+                    used_idx[item] = used_idx.get(item, 0) + 1
 
+                if cf.test_partial and tstep > cf.test_partial:
+                    break
 
-
-            
-            avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
-            avg_code_loss.update(loss_dict['code_loss'].item(), 1)
-            avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
+                
+                cf.save_test(tstep, image_path, batch, patch, ori_seg, net.recon_seg, sample, prob, code_ids, sigmoid_layer)
         
+                avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
+                avg_code_loss.update(loss_dict['code_loss'].item(), 1)
+                avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
+
+                del sample
+                torch.cuda.empty_cache()
+                
             
-        logging.info('step {} [seg_loss: {:.4f}] [code_loss: {:.4f}] [cls_loss: {:.4f}]'.format(\
-            tstep, avg_seg_loss.avg, avg_code_loss.avg, avg_cls_loss.avg,
+                
+            logging.info('step {} [seg_loss: {:.4f}] [code_loss: {:.4f}] [cls_loss: {:.4f}]'.format(\
+                tstep, avg_seg_loss.avg, avg_code_loss.avg, avg_cls_loss.avg,
+                )
             )
-        )
 
-        logging.info(' quantization usage summary \n ')
-        for key in sorted(used_idx.keys()):
-            logging.info('{} : {}, '.format(key, used_idx[key]),)
+            logging.info(' quantization usage summary \n ')
+            for key in sorted(used_idx.keys()):
+                logging.info('{} : {}, '.format(key, used_idx[key]),)
 
-        logging.info(' dictionary size : {}/{}'.format(len(used_idx), net.num_instance))
+            logging.info(' dictionary size : {}/{}'.format(len(used_idx), net.num_instance))
 
 
 

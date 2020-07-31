@@ -1,5 +1,5 @@
 from loaders import LIDC_IDRI
-from vq_models import ResQNet
+from probabilistic_unet import ProbabilisticUnet
 from os.path import join as pjoin
 import torch, torchvision
 from torchvision.utils import save_image
@@ -11,35 +11,18 @@ save_base_path = '/lustre/project/RonaldLui/Syl/project/prob_reg/'
 input_channels = 1
 output_channels = 1
 num_filters = [32, 64, 128, 192]
-num_classifier_filters = [256, 512]
-num_instance = 512
-num_feature_channels = 128
-posterior_layer = -1
-use_focal_loss = False
-if use_focal_loss:
-    focal_weight = 1
-use_l1loss = False
+num_feature_channels = 6
 
-data_dependant_qstat = True
-if data_dependant_qstat:
-    sigma_scale = 1
-use_quantization_diff_with_decay = False
-if use_quantization_diff_with_decay:
-    init_diff_decay = 0.8
-    decay_pow = 0.97
 
-net = ResQNet(input_channels=input_channels, output_channels=output_channels, \
-                num_filters=num_filters, num_classifier_filters=num_classifier_filters, num_instance=num_instance, num_feature_channels=num_feature_channels, 
-                posterior_layer=posterior_layer, bn=False)  
+
+net = ProbabilisticUnet(input_channels=input_channels, num_classes=output_channels, num_filters=num_filters, latent_dim=num_feature_channels, no_convs_fcomb=4, beta=10.0)  
 
 train_bs = 32
 val_bs = 10
 epochs = 900
 milestones = [0, 300, 600, 800]
 lr_milestones = [1e-4, 5e-5, 1e-5, 5e-6]
-warm_up_epochs = 150
-beta = 0.25
-lr_decay = 0.3
+
 
 resume_training = False
 if resume_training:
@@ -50,7 +33,7 @@ train_dataset = LIDC_IDRI(path_base = data_path_base, list_id='train', random_cr
 val_dataset = LIDC_IDRI(path_base = data_path_base, list_id='val')
 
 # for testing #
-check_point = 'models/LIDC_07_16_2020_21_28/07_16_2020_21_28_epoch_current.pth'
+check_point = 'models/LIDC_pu_07_16_2020_21_29/07_16_2020_21_29_epoch_current.pth'
 sample_num = 16
 top_k_sample = True
 
@@ -61,9 +44,10 @@ else:
     test_bs = 5
 test_dataset = LIDC_IDRI(path_base = data_path_base, list_id='test')
 test_dataset.idx2 = 0
-test_partial = 200
+test_partial = False
 
-def save_test(tstep, image_path, batch, patch, ori_seg, recon_seg, sample, prob, code_ids, sigmoid_layer):
+
+def save_test(tstep, image_path, batch, patch, ori_seg, recon_seg, sample, prob, sigmoid_layer):
     if 'img_key' in batch.keys():
         img_key = batch['img_key'][0].replace('/', '_').replace('.png', '')
     else:
@@ -76,7 +60,6 @@ def save_test(tstep, image_path, batch, patch, ori_seg, recon_seg, sample, prob,
             np.save(pjoin(image_path, "{}_{}sample_labelIds.npy".format(img_key, sample_num)), sample.cpu().numpy())
                 
             np.save(pjoin(image_path, "{}_{}prob.npy".format(img_key, sample_num)), prob)
-            np.save(pjoin(image_path, "{}_{}code_id.npy".format(img_key, sample_num)), code_ids)
     else: 
                 
         tmp = torch.cat([patch, ori_seg, sigmoid_layer(recon_seg), sigmoid_layer(sample)], dim=0)

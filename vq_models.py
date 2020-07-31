@@ -339,6 +339,7 @@ class ResQNet(nn.Module):
         self.seg_criterion_focal = FocalLoss2d(gamma=0.5)
         self.sm = nn.Softmax(dim=1)
 
+
     def _init_emb(self, mu=0, sigma=1):
         self.emb = QuantizeEMA(self.latent_dim, self.num_instance, sigma=sigma).to(device)
 
@@ -385,7 +386,8 @@ class ResQNet(nn.Module):
         # out = idx.float() / (level_count - 1)
         emb_idx = idx
         if effective_idx:
-            emd_idx = effective_idx
+            for j in range(N):
+                emb_idx[j] = effective_idx[idx[j]]
         samples = F.embedding(emb_idx, self.emb.embed.transpose(0,1))
         samples = samples.view(-1, self.latent_dim, 1, 1)
         # samples = F.interpolate(samples, [self.prior_z.shape[2], self.prior_z.shape[3]])
@@ -416,7 +418,7 @@ class ResQNet(nn.Module):
             # print(seg_loss.shape)
             # print(mask.shape)
             # seg_loss = seg_loss * mask[:,0,...]
-            seg_loss, seg_loss_focal = self.seg_criterion_focal(self.recon_seg, segm[:,0,...].long())
+            seg_loss, seg_loss_focal = self.seg_criterion_focal(self.recon_seg, segm)
             # print(seg_loss_focal.shape) 
             seg_loss = seg_loss * mask[:,0,...]
             seg_loss_focal = seg_loss_focal * mask[:,0,...]
@@ -435,6 +437,29 @@ class ResQNet(nn.Module):
         classification_loss = self.classifier.loss(self.quantized_posterior_z_ind.view(-1))
 
         return {'seg_loss':seg_loss, 'seg_loss_focal':seg_loss_focal, 'code_loss':code_loss, 'classification_loss':classification_loss}
+
+    def l1loss(self, segm, mask=None):
+        if mask is not None:
+            # seg_loss = self.seg_criterion(self.recon_seg, segm[:,0,...].long())
+            # print(seg_loss.shape)
+            # print(mask.shape)
+            # seg_loss = seg_loss * mask[:,0,...]
+            seg_loss = F.smooth_l1_loss(self.recon_seg, segm, reduction='none')
+            # print(seg_loss_focal.shape) 
+            seg_loss = seg_loss * mask[:,0,...]
+            mask_sum = mask.sum()
+            seg_loss = seg_loss.sum() / (mask_sum + 1e-5)
+           
+        else:
+            # seg_loss = self.seg_criterion(self.recon_seg, segm)
+            seg_loss = F.smooth_l1_loss(self.recon_seg, segm, reduction='none')
+            seg_loss = seg_loss.mean()
+
+        
+        code_loss = self.diff.pow(2).mean()
+        classification_loss = self.classifier.loss(self.quantized_posterior_z_ind.view(-1))
+
+        return {'seg_loss':seg_loss, 'code_loss':code_loss, 'classification_loss':classification_loss}
 
 
 

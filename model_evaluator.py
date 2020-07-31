@@ -89,22 +89,22 @@ def get_mode_counts(d_matrix_YS):
     return mode_count
 
 
-def get_pixelwise_mode_counts(cf, seg, seg_samples):
+def get_pixelwise_mode_counts(data_loader, seg, seg_samples):
     """
     Calculate pixel-wise mode counts.
-    :param cf: config module
+    :param data_loader: data loader used for the model, must has swticher implemented
     :param seg: 4D array of integer labeled segmentations
     :param seg_samples: 5D array of integer labeled segmentations
     :return: array of shape (switchable classes, 3)
     """
     assert seg.shape == seg_samples.shape[1:]
     num_samples = seg_samples.shape[0]
-    pixel_counts = np.zeros(shape=(len(cf.label_switches),3), dtype=np.int)
+    pixel_counts = np.zeros(shape=(len(data_loader.switcher._label_switches),3), dtype=np.int)
 
     # iterate all switchable classes
-    for i,c in enumerate(cf.label_switches.keys()):
-        c_id = cf.name2trainId[c]
-        alt_c_id = cf.name2trainId[c+'_2']
+    for i,c in enumerate(data_loader.switcher._label_switches.keys()):
+        c_id = data_loader.switcher._name2id[c]
+        alt_c_id = data_loader.switcher.name2id[c+'_2']
         c_ixs = np.where(seg == c_id)
 
         total_num_pixels = np.sum((seg == c_id).astype(np.uint8)) * num_samples
@@ -215,18 +215,19 @@ def get_energy_distance_components(gt_seg_modes, seg_samples, eval_class_ids, ig
     return {'YS': d_matrix_YS, 'SS': d_matrix_SS, 'YY': d_matrix_YY}
 
 
-def calc_energy_distances(d_matrices, num_samples=None, probability_weighted=False, label_switches=None, exp_mode=5):
+def calc_energy_distances(d_matrices, num_samples=None, source_probability_weighted=None, target_probability_weighted=None):
     """
     Calculate the energy distance for each image based on matrices holding the combinatorial distances.
     :param d_matrices: dict holding 4D arrays of shape \
     (num_images, num_modes/num_samples, num_modes/num_samples, num_classes)
     :param num_samples: integer or None
-    :param probability_weighted: bool
+    :param source_probability_weighted: probability vector (num_testing_sample, num_samples)
+    :param target_probability_weighted: probability vector (num_testing_sample, num_modes)
     :param label_switches: None or dict
     :param exp_mode: integer
     :return: numpy array
     """
-    d_matrices = d_matrices.copy()
+    d_matrices = d_matrices.copy() # (num_testing_sample, num_modes, num_source, num_class)
 
     if num_samples is None:
         num_samples = d_matrices['SS'].shape[1]
@@ -236,36 +237,70 @@ def calc_energy_distances(d_matrices, num_samples=None, probability_weighted=Fal
 
     # perform a nanmean over the class axis so as to not factor in classes that are not present in
     # both the ground-truth mode as well as the sampled prediction
-    if probability_weighted:
-       mode_stats = get_mode_statistics(label_switches, exp_modes=exp_mode)
-       mode_probs = mode_stats['mode_probs']
+    if (target_probability_weighted is not None) and (source_probability_weighted is None):
+        
+        mode_probs = target_probability_weighted
 
-       mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1)
-       mean_d_YS = np.mean(mean_d_YS, axis=2)
-       mean_d_YS = mean_d_YS * mode_probs[np.newaxis, :]
-       d_YS = np.sum(mean_d_YS, axis=1)
+        mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1) # average over classes
+        mean_d_YS = np.mean(mean_d_YS, axis=2) # average over source i.e. samples, since no source probability is provided
+        mean_d_YS = mean_d_YS * mode_probs
+        d_YS = np.sum(mean_d_YS, axis=1)
 
-       mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
-       d_SS = np.mean(mean_d_SS, axis=(1, 2))
+        mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
+        d_SS = np.mean(mean_d_SS, axis=(1, 2))
 
-       mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
-       mean_d_YY = mean_d_YY * mode_probs[np.newaxis, :, np.newaxis] * mode_probs[np.newaxis, np.newaxis, :]
-       d_YY = np.sum(mean_d_YY, axis=(1, 2))
+        mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
+        mean_d_YY = mean_d_YY * mode_probs[:, :, np.newaxis] * mode_probs[:, np.newaxis, :]
+        d_YY = np.sum(mean_d_YY, axis=(1, 2))
+
+    elif (target_probability_weighted is None) and (source_probability_weighted is not None):
+        mode_probs = source_probability_weighted
+
+        mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1) 
+        mean_d_YS = np.mean(mean_d_YS, axis=1) # average over target
+        mean_d_YS = mean_d_YS * mode_probs
+        d_YS = np.sum(mean_d_YS, axis=1)
+
+        mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
+        d_YY = np.mean(mean_d_YY, axis=(1, 2))
+
+        mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
+        mean_d_SS = mean_d_SS * mode_probs[:, :, np.newaxis] * mode_probs[:, np.newaxis, :]
+        d_SS = np.sum(mean_d_SS, axis=(1, 2))
+        
+
+    elif (target_probability_weighted is not None) and (source_probability_weighted is not None):
+        mode_probs_target = target_probability_weighted
+        mode_probs_source = source_probability_weighted
+
+        mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1)
+        mean_d_YS = mean_d_YS * mode_probs_target[:, :, np.newaxis] * mode_probs_source[:, np.newaxis, :] 
+
+        d_YS = np.sum(mean_d_YS, axis=[1,2])
+
+        mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
+        mean_d_SS = mean_d_SS * mode_probs_source[:, :, np.newaxis] * mode_probs_source[:, np.newaxis, :]
+        d_SS = np.sum(mean_d_SS, axis=(1, 2))
+
+        mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
+        mean_d_YY = mean_d_YY * mode_probs_target[:, :, np.newaxis] * mode_probs_target[:, np.newaxis, :]
+        d_YY = np.sum(mean_d_YY, axis=(1, 2))
+
 
     else:
-       mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1)
-       d_YS = np.mean(mean_d_YS, axis=(1,2))
+        mean_d_YS = np.nanmean(d_matrices['YS'], axis=-1)
+        d_YS = np.mean(mean_d_YS, axis=(1,2))
 
-       mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
-       d_SS = np.mean(mean_d_SS, axis=(1, 2))
+        mean_d_SS = np.nanmean(d_matrices['SS'], axis=-1)
+        d_SS = np.mean(mean_d_SS, axis=(1, 2))
 
-       mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
-       d_YY = np.nanmean(mean_d_YY, axis=(1, 2))
+        mean_d_YY = np.nanmean(d_matrices['YY'], axis=-1)
+        d_YY = np.nanmean(mean_d_YY, axis=(1, 2))
 
     return 2 * d_YS - d_SS - d_YY
 
 
-def eval_city(cf, cities, queue=None, ixs=None):
+def eval_city(cf, file_list, data_loader, queue=None):
     """
     Perform evaluation w.r.t the generalized energy distance based on the IoU as well as image-level and pixel-level
     mode frequencies (using samples written to file).
@@ -275,56 +310,49 @@ def eval_city(cf, cities, queue=None, ixs=None):
     :param ixs: None or 2-tuple of ints
     :return: NoneType or numpy array
     """
-    data_dir = os.path.join(cf.data_dir, cf.resolution)
-    data_dict = loadFiles(label_density=cf.label_density, split='val', input_path=data_dir, cities=cities,
-                          instance=False)
+    
 
     num_modes = cf.num_modes
     num_samples = cf.num_samples
 
     # evaluate only switchable classes, so a total of 10 here
-    eval_class_names = list(cf.label_switches.keys()) + list(cf.switched_name2Id.keys())
-    eval_class_ids = [cf.name2trainId[n] for n in eval_class_names]
-    d_matrices = {'YS': np.zeros(shape=(len(data_dict), num_modes, num_samples, len(eval_class_ids)),
+    eval_class_names = list(data_loader.switcher._label_switches.keys()) + list(data_loader.switcher._switched_name2Id.keys())
+    eval_class_ids = [data_loader.switcher._name2id[n] for n in eval_class_names]
+
+    d_matrices = {'YS': np.zeros(shape=(len(file_list), num_modes, num_samples, len(eval_class_ids)),
                                  dtype=np.float32),
-                  'YY': np.ones(shape=(len(data_dict), num_modes, num_modes, len(eval_class_ids)),
+                  'YY': np.ones(shape=(len(file_list), num_modes, num_modes, len(eval_class_ids)),
                                 dtype=np.float32),
-                  'SS': np.ones(shape=(len(data_dict), num_samples, num_samples, len(eval_class_ids)),
+                  'SS': np.ones(shape=(len(file_list), num_samples, num_samples, len(eval_class_ids)),
                                 dtype=np.float32)}
     sampled_mode_counts = np.zeros(shape=(num_modes,), dtype=np.int)
     sampled_pixel_counts = np.zeros(shape=(len(cf.label_switches), 3), dtype=np.int)
 
     logging.info('Evaluating class names: {} (corresponding to labels {})'.format(eval_class_names, eval_class_ids))
 
-    # allow for data selection by indexing via ixs
-    if ixs is None:
-        data_keys = list(data_dict.keys())
-    else:
-        data_keys = list(data_dict.keys())[ixs[0]:ixs[1]]
-        for k in d_matrices.keys():
-            d_matrices[k] = d_matrices[k][:ixs[1]-ixs[0]]
-
     # iterate all validation images
-    for img_n, img_key in enumerate(tqdm(data_keys)):
-
-        seg = np.load(data_dict[img_key]['seg'])
-        seg = map_labels_to_trainId(seg)
+    for img_n, file in enumerate(tqdm(file_list)):
+        img_key = os.path.basename(file).replace("_16prob.npy", "")
+        data_dict = data_loader.get_gt_modes(img_key)
+        
+        seg = data_dict['seg']
         seg = seg[np.newaxis, np.newaxis]
         ignore_mask = (seg == cf.ignore_label).astype(np.uint8)
 
-        seg_samples = get_array_of_samples(cf, img_key)
-        gt_seg_modes = get_array_of_modes(cf, seg)
+        seg_samples = np.load(file.replace("prob.npy", "sample_labelIds.npy"))[:,None,...]
+        gt_seg_modes = data_dict['gt_modes']
 
         energy_dist = get_energy_distance_components(gt_seg_modes=gt_seg_modes, seg_samples=seg_samples,
                                                      eval_class_ids=eval_class_ids, ignore_mask=ignore_mask)
+
         sampled_mode_counts += get_mode_counts(energy_dist['YS'])
-        sampled_pixel_counts += get_pixelwise_mode_counts(cf, seg, seg_samples)
+        sampled_pixel_counts += get_pixelwise_mode_counts(data_loader, seg, seg_samples)
 
         for k in d_matrices.keys():
             d_matrices[k][img_n] = energy_dist[k]
 
     results = {'d_matrices': d_matrices, 'sampled_pixel_counts': sampled_pixel_counts,
-               'sampled_mode_counts': sampled_mode_counts, 'total_num_samples': len(data_keys) * num_samples}
+               'sampled_mode_counts': sampled_mode_counts, 'total_num_samples': len(file_list) * num_samples}
 
     if queue is not None:
         queue.put(results)
@@ -333,48 +361,37 @@ def eval_city(cf, cities, queue=None, ixs=None):
         return results
 
 
-def eval_LIDC(cf, queue=None, ixs=None):
-    from loaders import LIDC_IDRI
-    data_loader = LIDC_IDRI(cf.path, list_id='test')
-
+def eval_LIDC(cf, file_list, data_loader, queue=None):
+    # print(file_list)
     num_modes = 4
     num_samples = cf.num_samples
 
-    # evaluate only switchable classes, so a total of 10 here
-    eval_class_ids = 1
-    d_matrices = {'YS': np.zeros(shape=(len(data_loader), num_modes, num_samples, len(eval_class_ids)),
+    # 
+    eval_class_ids = [1]
+    d_matrices = {'YS': np.zeros(shape=(len(file_list), num_modes, num_samples, len(eval_class_ids)),
                                  dtype=np.float32),
-                  'YY': np.ones(shape=(len(data_loader), num_modes, num_modes, len(eval_class_ids)),
+                  'YY': np.ones(shape=(len(file_list), num_modes, num_modes, len(eval_class_ids)),
                                 dtype=np.float32),
-                  'SS': np.ones(shape=(len(data_loader), num_samples, num_samples, len(eval_class_ids)),
+                  'SS': np.ones(shape=(len(file_list), num_samples, num_samples, len(eval_class_ids)),
                                 dtype=np.float32)}
 
 
-    # allow for data selection by indexing via ixs
-    if ixs is None:
-        data_keys = data_loader.data_list
-    else:
-        data_keys = data_loader.data_list[ixs[0]:ixs[1]]
-        for k in d_matrices.keys():
-            d_matrices[k] = d_matrices[k][:ixs[1]-ixs[0]]
 
     # iterate all validation images
-    for img_n, img_key in enumerate(tqdm(data_keys)):
-
-        ignore_mask = None
-
-        seg_samples = get_array_of_samples_combined(cf, img_key)
-        gt_seg_modes = data_loader.gt_seg_modes(img_n)
+    for img_n, file in enumerate(tqdm(file_list)):
+        img_key = os.path.basename(file).replace("_16prob.npy", "")
+        seg_samples = np.load(file.replace("prob.npy", "sample_labelIds.npy"))[:,None,...]
+        # print(seg_samples.shape)
+        gt_seg_modes = data_loader.get_gt_modes(img_key)['gt_modes'][:,None, None, ...]
 
         energy_dist = get_energy_distance_components(gt_seg_modes=gt_seg_modes, seg_samples=seg_samples,
-                                                     eval_class_ids=eval_class_ids, ignore_mask=ignore_mask)
+                                                     eval_class_ids=eval_class_ids, ignore_mask=None)
 
-
+        # print(energy_dist)
         for k in d_matrices.keys():
             d_matrices[k][img_n] = energy_dist[k]
 
-    results = {'d_matrices': d_matrices,
-               'total_num_samples': len(data_keys) * num_samples}
+    results = {'d_matrices': d_matrices}
 
     if queue is not None:
         queue.put(results)
@@ -401,12 +418,12 @@ def multiprocess_evaluation_city(cf):
     """Evaluate the energy distance in multiprocessing.
     :param cf: config module"""
     q = Queue()
-    results = runInParallel([(eval_city, (cf, 'lindau', q)),
-                             (eval_city, (cf, 'frankfurt', q, (0, 100))),
-                             (eval_city, (cf, 'frankfurt', q, (100, 200))),
-                             (eval_city, (cf, 'frankfurt', q, (200, 267))),
-                             (eval_city, (cf, 'munster', q, (0, 100))),
-                             (eval_city, (cf, 'munster', q, (100, 174)))],
+    results = runInParallel([(eval_city, (cf, cf.file_list[0:100], cf.data_loader, q)),
+                             (eval_city, (cf, cf.file_list[100:200], cf.data_loader, q)),
+                             (eval_city, (cf, cf.file_list[200:300], cf.data_loader, q)),
+                             (eval_city, (cf, cf.file_list[300:400], cf.data_loader, q)),
+                             (eval_city, (cf, cf.file_list[400:500], cf.data_loader, q)),
+                             ],
                              queue=q)
     total_num_samples = 0
     sampled_mode_counts = np.zeros(shape=(cf.num_modes,), dtype=np.int)
@@ -448,9 +465,21 @@ def multiprocess_evaluation_LIDC(cf):
     """Evaluate the energy distance in multiprocessing.
     :param cf: config module"""
     q = Queue()
-    results = runInParallel([(eval_LIDC, (cf, q, (0, 180))),
-                             (eval_LIDC, (cf, q, (181, 381)))],
+    results = runInParallel([
+                            (eval_LIDC, (cf, cf.file_list[0:250], cf.data_loader, q)),\
+                            (eval_LIDC, (cf, cf.file_list[250:500], cf.data_loader, q)), \
+                            (eval_LIDC, (cf, cf.file_list[500:750], cf.data_loader, q)), \
+                            (eval_LIDC, (cf, cf.file_list[750:1000], cf.data_loader, q)), \
+                            (eval_LIDC, (cf, cf.file_list[1000:1250], cf.data_loader, q)), \
+                            (eval_LIDC, (cf, cf.file_list[1250:1450], cf.data_loader, q)),
+                            (eval_LIDC, (cf, cf.file_list[1450:1700], cf.data_loader, q)), \
+                            (eval_LIDC, (cf, cf.file_list[1700:], cf.data_loader, q)), 
+                             ],
                              queue=q)
+    # results = runInParallel([(eval_LIDC, (cf, cf.file_list[0:1], cf.data_loader, q)),
+    #                          ],
+    #                          queue=q)
+    # print(results)
    
     d_matrices = {'YS':[], 'SS':[], 'YY':[]}
 
@@ -504,7 +533,7 @@ def calc_confusion(labels, samples, class_ixs, loss_mask=None):
     """
     Compute confusion matrix for each class across the given arrays.
     Assumes classes are given in integer-valued encoding.
-    :param labels: 4/5D array
+    :param labels: 4/5D array (1, num_class, h, w)
     :param samples: 4/5D array
     :param class_ixs: integer or list of integers specifying the classes to evaluate
     :param loss_mask: 4/5D array
@@ -540,6 +569,46 @@ def calc_confusion(labels, samples, class_ixs, loss_mask=None):
 
     return conf_matrix
 
+# def calc_confusion(labels, samples, class_ixs, loss_mask=None):
+#     """
+#     Compute confusion matrix for each class across the given arrays.
+#     Assumes classes are given in integer-valued encoding.
+#     :param labels: 4/5D array (1, num_class, h, w)
+#     :param samples: 4/5D array
+#     :param class_ixs: integer or list of integers specifying the classes to evaluate
+#     :param loss_mask: 4/5D array
+#     :return: 2D array
+#     """
+#     try:
+#         assert labels.shape == samples.shape
+#     except:
+#         raise AssertionError('shape mismatch {} vs. {}'.format(labels.shape, samples.shape))
+
+#     if isinstance(class_ixs, int):
+#         num_classes = class_ixs
+#         class_ixs = range(class_ixs)
+#     elif isinstance(class_ixs, list):
+#         num_classes = len(class_ixs)
+#     else:
+#         raise TypeError('arg class_ixs needs to be int or list, not {}.'.format(type(class_ixs)))
+
+#     if loss_mask is None:
+#         shp = labels.shape
+#         loss_mask = np.zeros(shape=(shp[0], 1, shp[2], shp[3]))
+
+#     conf_matrix = np.zeros(shape=(num_classes, 4), dtype=np.float32)
+#     for i,c in enumerate(class_ixs):
+
+#         pred_ = (samples == c).astype(np.uint8)
+#         labels_ = (labels == c).astype(np.uint8)
+
+#         conf_matrix[i,0] = int(((pred_ != 0) * (labels_ != 0) * (loss_mask != 1)).sum()) # TP
+#         conf_matrix[i,1] = int(((pred_ != 0) * (labels_ == 0) * (loss_mask != 1)).sum()) # FP
+#         conf_matrix[i,2] = int(((pred_ == 0) * (labels_ == 0) * (loss_mask != 1)).sum()) # TN
+#         conf_matrix[i,3] = int(((pred_ == 0) * (labels_ != 0) * (loss_mask != 1)).sum()) # FN
+
+#     return conf_matrix
+
 
 def metrics_from_conf_matrix(conf_matrix):
     """
@@ -560,7 +629,8 @@ def metrics_from_conf_matrix(conf_matrix):
         if tps[c] + fps[c] + fns[c] != 0:
             metrics['iou'][c] = tps[c] / (tps[c] + fps[c] + fns[c])
         else:
-            metrics['iou'][c] = np.nan
+            metrics['iou'][c] = 1
+            # metrics['iou'][c] = np.nan
 
     return metrics
 
@@ -568,3 +638,8 @@ def metrics_from_conf_matrix(conf_matrix):
 if __name__ == '__main__':
     cf = imp.load_source('cf', 'LIDC_eval_config.py')
     multiprocess_evaluation_LIDC(cf)
+    # conf_matrix = calc_confusion(np.concatenate([np.zeros([1,1, 10, 10]),np.ones([1,1, 10, 10])], axis=2),\
+    #         np.concatenate([np.zeros([1,1, 15, 10]),np.ones([1,1, 5, 10])], axis=2), \
+    #          [1], loss_mask=None)
+    # print(conf_matrix)
+    # print(metrics_from_conf_matrix(conf_matrix)['iou'])

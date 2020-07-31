@@ -179,7 +179,7 @@ class FocalLoss2d(nn.Module):
         if input.shape[1] == 1:
             logpt = -F.binary_cross_entropy_with_logits(input, target, reduction='none')        
         else:
-            logpt = -F.cross_entropy(input, target, reduction='none')
+            logpt = -F.cross_entropy(input, target[:,0,...].long(), reduction='none')
         
         pt = torch.exp(logpt)
         # compute the loss

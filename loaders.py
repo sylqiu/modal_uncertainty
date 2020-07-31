@@ -10,12 +10,14 @@ import PIL.Image as Image
 from PIL.Image import open as imread
 from PIL.Image import fromarray
 import torchvision.transforms.functional as TF
-from collections import OrderedDict
+from collections import OrderedDict,defaultdict
 from cityscapes_labels import labels as cs_labels_tuple
 import matplotlib.pyplot as plt
+import random
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# random.seed(0)
 class LIDC_IDRI(Dataset):
     def __init__(self, path_base, list_id='train', random_crop_size=None, random_ratio=None, random_flip=False, random_rotate=False):
         
@@ -55,19 +57,19 @@ class LIDC_IDRI(Dataset):
         
         if self.random_crop_size:
             ori_height, ori_width = x['img'].height, x['img'].width 
-            hs = np.random.random_integers(self.random_crop_size[0], self.random_crop_size[1])
-            random_ratio = np.random.uniform(self.random_ratio[0], self.random_ratio[1])
+            hs = torch.randint(int(self.random_crop_size[0]), int(self.random_crop_size[1]+1), (1,)).item()
+            random_ratio = torch.rand(1).item() * (-self.random_ratio[0] + self.random_ratio[1]) + self.random_ratio[0]
             ws = hs * ori_width / ori_height * random_ratio
             if hs > ori_height or ws > ori_width:
                 hp = int(np.abs(-ori_height + hs))
                 wp = int(np.abs(-ori_width + ws))
-                x_p = np.random.random_integers(0, wp)
-                y_p = np.random.random_integers(0, hp)
+                x_p = torch.randint(0, int(wp+1), (1,)).item()
+                y_p = torch.randint(0, int(hp+1), (1,)).item()
                 return {'img':TF.resized_crop(TF.pad(x['img'], (wp, hp)), y_p, x_p, hs, ws, [ori_height, ori_width]),
                         'seg':TF.resized_crop(TF.pad(x['seg'], (wp, hp)), y_p, x_p, hs, ws, [ori_height, ori_width])}
             else:
-                x_p = np.random.random_integers(0, ori_width - ws)
-                y_p = np.random.random_integers(0, ori_height - hs)
+                x_p = torch.randint(0, int(ori_width - ws + 1), (1,)).item()
+                y_p = torch.randint(0, int(ori_height - hs + 1), (1,)).item()
                 return {'img':TF.resized_crop(x['img'], y_p, x_p, hs, ws, [ori_height, ori_width]),
                  'seg':TF.resized_crop(x['seg'], y_p, x_p, hs, ws, [ori_height, ori_width])}
         else:
@@ -75,7 +77,7 @@ class LIDC_IDRI(Dataset):
 
     def _random_flip(self, x):
         if self.random_flip:
-            coin = np.random.randint(0, 2)
+            coin = torch.randint(0, 2, (1,)).item()
             if coin == 0:
                 return {'img': TF.hflip(x['img']), 'seg': TF.hflip(x['seg'])}
             else:
@@ -85,9 +87,9 @@ class LIDC_IDRI(Dataset):
 
     def _random_rotate(self, x):
         if self.random_rotate:
-            angle = np.random.randint(self.random_rotate[0], self.random_rotate[1])
+            angle = torch.randint(int(self.random_rotate[0]), int(self.random_rotate[1]+1), (1,)).item()
             return {'img': TF.rotate(x['img'], angle, resample=3, fill=(0,)), 
-                    'seg': TF.rotate(x['seg'], angle, resample=3, fill=(0,))}
+                    'seg': TF.rotate(x['seg'], angle, resample=3, fill=(0,)) }
         else:
             return x
 
@@ -95,7 +97,7 @@ class LIDC_IDRI(Dataset):
     
     def __getitem__(self, idx):
         if self.idx2 == None:
-            seg_id = np.random.randint(4)
+            seg_id = torch.randint(0, 4, (1,)).item()
 
             # seg_id = 3
             image_name = pjoin(self.path_base, 'images', self.data_list[idx])
@@ -121,12 +123,15 @@ class LIDC_IDRI(Dataset):
             return {'img':img, 'seg':seg, 'img_key':self.data_list[idx]}
 
 
-    def gt_seg_modes(self, idx):
+    def get_gt_modes(self, img_key):
         seg_modes = np.zeros([4, 180, 180])
+        img_key = img_key[:14] + '/' + img_key[15:]
         for i in range(4):
-            seg_modes[i, ...] = np.array(imread(pjoin(self.path_base, 'gt', self.data_list[idx].replace('.png', '_l%d.png'%(i))))) / 255.
+            seg_modes[i, ...] = np.array(imread(pjoin(self.path_base, 'gt', img_key + '_l%d.png'%(i)))) / 255.
+
+        img = np.array(imread(pjoin(self.path_base, 'images', img_key + '.png'))) / 255.
         
-        return seg_modes
+        return {'gt_modes': seg_modes, 'img' : img[None, ...]}
 
 
 class StochasticLabelSwitches(object):
@@ -153,6 +158,8 @@ class StochasticLabelSwitches(object):
         switched_cmap = {switched_name2Id[i]:switched_labels2color[i] for i in switched_name2Id.keys()}
         self.color_map = {**self.color_map, **switched_cmap}
         # trainId2name = {**trainId2name, **switched_Id2name}
+        self._switched_name2Id = switched_name2Id
+
         self._name2id = {**name2trainId, **switched_name2Id}
 
     def __call__(self, data_dict):
@@ -162,7 +169,7 @@ class StochasticLabelSwitches(object):
         for c, p in self._label_switches.items():
             init_id = self._name2id[c]
             final_id = self._name2id[c + '_2']
-            switch_instance = np.random.binomial(1, p)
+            switch_instance = torch.rand(1).item() <= p
 
 
             if switch_instance:
@@ -245,7 +252,7 @@ class CityScapeSwitch(Dataset):
 
     def _random_flip(self, x):
         if self.random_flip:
-            coin = np.random.randint(0, 2)
+            coin = torch.randint(0, 2, (1,)).item()
             if coin == 0:
                 return {'img': TF.hflip(x['img']), 'seg': TF.hflip(x['seg'])}
             else:
@@ -255,7 +262,7 @@ class CityScapeSwitch(Dataset):
 
     def _random_rotate(self, x):
         if self.random_rotate:
-            angle = np.random.randint(self.random_rotate[0], self.random_rotate[1])
+            angle = torch.randint(int(self.random_rotate[0]), int(self.random_rotate[1]+1), (1,)).item()
             return {'img': TF.rotate(x['img'], angle, resample=0, fill=(0,0,0)), 
             'seg': TF.rotate(x['seg'], angle, resample=0, fill=(255,))}
         else:
@@ -264,19 +271,19 @@ class CityScapeSwitch(Dataset):
     def _random_crop(self, x):       
         if self.random_crop_size:
             ori_height, ori_width = x['img'].height, x['img'].width
-            hs = np.random.random_integers(self.random_crop_size[0], self.random_crop_size[1])
-            random_ratio = np.random.uniform(self.random_ratio[0], self.random_ratio[1])
+            hs = torch.randint(self.random_crop_size[0], self.random_crop_size[1]+1, (1,)).item()
+            random_ratio = torch.rand(1).item() * (-self.random_ratio[0] + self.random_ratio[1]) + self.random_ratio[0]
             ws = hs * ori_width / ori_height * random_ratio
             if hs > ori_height or ws > ori_width:
                 hp = int(np.abs(-ori_height + hs))
                 wp = int(np.abs(-ori_width + ws))
-                x_p = np.random.random_integers(0, wp)
-                y_p = np.random.random_integers(0, hp)
+                x_p = torch.randint(0, int(wp+1), (1,)).item()
+                y_p = torch.randint(0, int(hp+1), (1,)).item()
                 return {'img':TF.resized_crop(TF.pad(x['img'], (wp, hp)), y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0),
                         'seg':TF.resized_crop(TF.pad(x['seg'], (wp, hp), fill=255), y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0)}
             else:
-                x_p = np.random.random_integers(0, ori_width - ws)
-                y_p = np.random.random_integers(0, ori_height - hs)
+                x_p = torch.randint(0, int(ori_width - ws + 1), (1,)).item()
+                y_p = torch.randint(0, int(ori_height - hs + 1), (1,)).item()
                 return {'img':TF.resized_crop(x['img'], y_p, x_p, hs, ws, [ori_height, ori_width],interpolation=0),
                  'seg':TF.resized_crop(x['seg'], y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0)}
         else:
@@ -284,7 +291,7 @@ class CityScapeSwitch(Dataset):
 
     def _gamma_transform(self, x):
         if self.gamma:
-            gamma = np.random.uniform(self.gamma[0], self.gamma[1])
+            gamma = self.gamma[0] + torch.rand(1).item() * (-self.gamma[0] + self.gamma[1])
             x['img'] = TF.adjust_gamma(x['img'], gamma)
         
         return x
@@ -309,9 +316,11 @@ class CityScapeSwitch(Dataset):
         return {'img' : x['img'].transpose(2, 0, 1)/255., 'seg' : x['seg'][None,...], 'mask':mask[None,...], 'img_key':self.data_list[idx]}
 
     
-    def get_gt_modes(self, idx):
+    def get_gt_modes(self, img_key):
         gt_modes = np.zeros([32, 256, 512])
-        seg = np.load(pjoin(self.path_base, self.data_list[idx]) + '_gtFine_labelIds.npy')
+        seg = np.load(pjoin(self.path_base, img_key) + '_gtFine_labelIds.npy')
+        img = np.load(pjoin(self.path_base, img_key) + '_leftImg8bit.npy')
+
         seg = self.map_labels_to_trainId(seg)
         probs = np.zeros([32])
         for i in range(32):
@@ -320,38 +329,202 @@ class CityScapeSwitch(Dataset):
             # print(switch_id)
             gt_modes[i], probs[i] = self.switcher._switch(seg_copy, switch_id)
         
-        return gt_modes, probs
+        return {'gt_modes': gt_modes, 'img' : img[None, ...], 'prob': probs, 'seg': seg}
 
 
 class MixMNIST(Dataset):
-     def __init__(self, path_base, list_id='train'):
+    def __init__(self, path_base, list_id='train'):
+        
+        if list_id == 'train': 
+            self.data, self.targets = torch.load(pjoin(path_base, 'processed/training.pt'))
+            self.length = self.data.shape[0]
+            print('=> Dataset contains %d images' % (self.length))
+        elif list_id == 'test':
+            self.data, self.targets = torch.load(pjoin(path_base, 'processed/test.pt'))
+            self.length = self.data.shape[0]
+            print('=> Dataset contains %d images' % (self.length))
+
+        self.label_idx_dict = dict()
+        for i in range(self.length):
+            # print(int(self.targets[i].item()))
+            self.label_idx_dict.setdefault(int(self.targets[i].item()), []).append(i)
+            
+        self.path_base = path_base
+        # print(self.label_idx_dict[1])
+
+        self.mode_labels = np.array([[1,2,3,4], [3,4,5,6], [5,6,7,8], [7,8,9,0]])
+        self.mode_probs = [0.3, 0.2, 0.2, 0.3]
+        self.select_probs = np.array([[0.25, 0.25, 0.25, 0.25], [0.1, 0.4, 0.1, 0.4], [0.3, 0.5, 0.1, 0.1], [0.1, 0.1, 0.1, 0.7]])
+        self.cumsum_probs = np.cumsum(self.mode_probs)
+        self.cumsum_select_probs = np.cumsum(self.select_probs, axis=1)
+        # print(self.cumsum_select_probs)
+        # torch.manual_seed(0)
+        # torch.cuda.manual_seed(0)
+        # np.random.seed(0)
+
+    def __len__(self):
+        return self.length
+
+    def random_sample_from_label(self, label):
+        label_list = self.label_idx_dict[label]
+        idx = torch.randint(0, len(label_list), (1,)).item()
+        return np.array(self.data[label_list[idx]]), idx
+
+    def _mode_sample(self, labels, seg_id, mode_idx):
+        img = []
+        seg = []
+        idxs = []
+        assert seg_id in range(4)
+        for i in range(4):
+            tmp, tmp_idx = self.random_sample_from_label(labels[i])
+            img.append(tmp)
+            idxs.append(tmp_idx)
+            if seg_id == i:
+                seg.append(tmp)
+            else:
+                seg.append(np.zeros_like(tmp))
+        img = np.concatenate(img, axis=1)
+        seg = np.concatenate(seg, axis=1)
+        img = img[None, ...]/255.
+        seg = seg[None,...]/255.
+
+        return {'img':img , 'seg':seg, 'img_key': '{}_{}_{}_{}_{}'.format(mode_idx, *idxs)}
+
+
+    def __getitem__(self, idx):
+        coin = torch.rand(1).item()
+        mode_idx = np.argmax(self.cumsum_probs > coin)
+        seg_coin = torch.rand(1).item()
+        seg_id = np.argmax(self.cumsum_select_probs[mode_idx] > seg_coin)
+        # print(mode_idx)
+        # print(seg_id)
+
+        return self._mode_sample(self.mode_labels[mode_idx], seg_id, mode_idx)
+
+    
+    def get_gt_modes(self, img_key):
+        img_key = list(map(int, img_key.split('_')))
+        mode_idx = img_key[0]
+        idxs = img_key[1:]
+        labels = self.mode_labels[mode_idx]
+        segs = []
+        j = 0
+        for label, idx in zip(labels, idxs):
+            seg = []
+            for i in range(4):
+                if i == j:
+                    seg.append(np.array(self.data[self.label_idx_dict[label][idx]]))
+                else:
+                    seg.append(np.zeros_like(np.array(self.data[self.label_idx_dict[label][idx]])))
+            j += 1
+            seg = np.concatenate(seg, axis=1)
+            segs.append(seg[None,...]/255.)
+               
+
+        return np.concatenate(segs, axis=0)
+            
+
+
+
+        
+class KittiMonoDepth(Dataset):
+    def __init__(self, path_base, list_id='train', random_crop_size=None, random_ratio=None, random_flip=False, random_rotate=False, gamma=None):
         if list_id == 'train':
             file_list = tuple(open(pjoin(path_base, 'train.txt'), 'r'))
-            self.data_list = [id_.rstrip() for id_ in file_list]
+            self.data_list = ['train/' + id_.rstrip() for id_ in file_list]
             self.length = len(self.data_list)
             print('=> Training Dataset contains %d images' % (self.length))
         elif list_id == 'val':
             file_list = tuple(open(pjoin(path_base, 'val.txt'), 'r'))
-            self.data_list = [id_.rstrip() for id_ in file_list]
+            self.data_list = ['val/' + id_.rstrip() for id_ in file_list]
             self.length = len(self.data_list)
             print('=> Validation Dataset contains %d images' % (self.length))
         elif list_id == 'test':
             file_list = tuple(open(pjoin(path_base, 'test.txt'), 'r'))
-            self.data_list = [id_.rstrip() for id_ in file_list]
+            self.data_list = ['test/' +id_.rstrip() for id_ in file_list]
             self.length = len(self.data_list)
             print('=> Testing Dataset contains %d images' % (self.length))
 
 
-        self.path_base = pjoin(path_base, 'processed/quarter')
+        self.path_base = pjoin(path_base, 'processed/half')
+        self.random_crop_size = random_crop_size
+        self.random_flip = random_flip
+        self.random_ratio = random_ratio
+        self.random_rotate = random_rotate
+        self.gamma = gamma
+        self.ori_height = 187
+        self.ori_width = 620
 
-    def sample_from_label(self, label):
+    def __len__(self):
+        return self.length
 
+
+    def _random_flip(self, x):
+        if self.random_flip:
+            coin = torch.randint(0, 2, (1,)).item()
+            if coin == 0:
+                return {'img': TF.hflip(x['img']), 'seg': TF.hflip(x['seg'])}
+            else:
+                return x
+        else:
+            return x
+
+    def _random_rotate(self, x):
+        if self.random_rotate:
+            angle = torch.randint(self.random_rotate[0], self.random_rotate[1], (1,)).item()
+            # print(x['seg'].size)
+            return {'img': TF.rotate(x['img'], angle, resample=0, fill=(0,0,0)), 
+            'seg': TF.rotate(x['seg'], angle, resample=0)}
+        else:
+            return x
     
+    def _random_crop(self, x):       
+        if self.random_crop_size:
+            ori_height, ori_width = self.ori_height, self.ori_width
+            hs = torch.randint(self.random_crop_size[0], self.random_crop_size[1]+1, (1,)).item()
+            random_ratio = torch.rand(1).item() * (-self.random_ratio[0] + self.random_ratio[1]) + self.random_ratio[0]
+            ws = hs * ori_width / ori_height * random_ratio
+            if hs > ori_height or ws > ori_width:
+                hp = int(np.abs(-ori_height + hs))
+                wp = int(np.abs(-ori_width + ws))
+                x_p = torch.randint(0, int(wp+1), (1,)).item()
+                y_p = torch.randint(0, int(hp+1), (1,)).item()
+                return {'img':TF.resized_crop(TF.pad(x['img'], (wp, hp)), y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0),
+                        'seg':TF.resized_crop(TF.pad(x['seg'], (wp, hp), fill=0), y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0)}
+            else:
+                x_p = torch.randint(0, int(ori_width - ws+1), (1,)).item()
+                y_p = torch.randint(0, int(ori_height - hs+1), (1,)).item()
+                return {'img':TF.resized_crop(x['img'], y_p, x_p, hs, ws, [ori_height, ori_width],interpolation=0),
+                 'seg':TF.resized_crop(x['seg'], y_p, x_p, hs, ws, [ori_height, ori_width], interpolation=0)}
+        else:
+            return x
+
+    def _gamma_transform(self, x):
+        if self.gamma:
+            gamma = torch.rand(1).item() * (-self.gamma[0] + self.gamma[1]) + self.gamma[0]
+            x['img'] = TF.adjust_gamma(x['img'], gamma)
+        
+        return x
+
+
     def __getitem__(self, idx):
+        img = np.load(pjoin(self.path_base, self.data_list[idx]) + '_rgb.npy')
+        seg = np.load(pjoin(self.path_base, self.data_list[idx]) + '_depth.npy')
+        # print(img.shape)
+        # print(seg.shape)
+        # print(seg.max())
+        img = fromarray(img.transpose(1, 2, 0).astype('uint8'))
+        
+        seg = fromarray((seg * 255. / seg.max()).astype('uint8'))
+        # print(seg.size)
+   
+        x = self._gamma_transform(self._random_rotate(self._random_flip(self._random_crop({'img':img, 'seg':seg}))))
+        x['img'] = np.array(x['img'])
+        x['seg'] = np.array(x['seg'])
 
-
-    
-
+        mask =  ((x['seg'] > 0).astype(np.uint8)) * (1 - (x['img'].mean(2) == 0).astype(np.uint8))
+        
+        return {'img' : x['img'].transpose(2, 0, 1)/255., 'seg' : x['seg'][None,...]/255., 'mask':mask[None,...], 'img_key':self.data_list[idx]}
 
 
 
@@ -360,7 +533,7 @@ class MixMNIST(Dataset):
 
 if __name__ == '__main__':
     # dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape', random_switch=True,random_crop_size=[256, 256], random_ratio=[0.8, 1.25], random_flip=True, random_rotate=[-15, 15], gamma=[0.7,1.5])
-    dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape')
+    dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape', 'val')
     
     # for i in range(10):
     #     fig, ax = plt.subplots(1, 3)
@@ -369,12 +542,12 @@ if __name__ == '__main__':
     #     ax[1].imshow(dataset.switcher._color_mapping(tmp['seg'][0,...])/255.)
     #     ax[2].imshow(tmp['mask'][0,...])
     #     plt.show()
-    fig, ax = plt.subplots(4, 8)
-    tmp, tmp_prob = dataset.get_gt_modes(0)
-    print(tmp_prob)
-    for i in range(32):
-        ax[i//8][i%8].imshow(dataset.switcher._color_mapping(tmp[i,...])/255.)
-    plt.show()
+    # fig, ax = plt.subplots(4, 8)
+    # tmp, tmp_prob = dataset.get_gt_modes(0)
+    # print(tmp_prob)
+    # for i in range(32):
+    #     ax[i//8][i%8].imshow(dataset.switcher._color_mapping(tmp[i,...])/255.)
+    # plt.show()
 
     # tmp = dataset[1]
     # seg = tmp['seg']
@@ -386,3 +559,26 @@ if __name__ == '__main__':
     # fig, ax = plt.subplots(1, 1)
     # ax.imshow(color_seg[0,...].cpu().numpy().transpose(1, 2, 0))
     # plt.show()
+
+    # dataset = MixMNIST('/home/syl/Documents/Project/prob_reg/generated_mu/MNIST', 'test')
+    # data_loader = DataLoader(dataset, batch_size=1, shuffle=False,
+    #         num_workers=1, pin_memory=True, sampler=None, worker_init_fn= lambda _: torch.manual_seed(0))
+    # for i, data in enumerate(data_loader):
+        
+    #     print(data['img_key'])
+    #     fig, ax = plt.subplots(1,2)
+    #     ax[0].imshow(data['img'][0,0,...])
+    #     ax[1].imshow(data['seg'][0,0,...])
+    #     print(data['img'].max())
+    #     plt.show()
+
+    # dataset = KittiMonoDepth('/home/syl/Documents/Project/prob_reg/dataset/KITTI/', list_id='train',random_crop_size=[140, 160], random_ratio=[0.8, 1.25], random_flip=True, random_rotate=[-5, 5], gamma=[0.9,1.2])
+    # # dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape')
+    
+    # for i in range(10):
+    #     fig, ax = plt.subplots(1, 3)
+    #     tmp = dataset[33583]  
+    #     ax[0].imshow(tmp['img'].transpose(1, 2, 0))
+    #     ax[1].imshow(tmp['seg'][0,...])
+    #     ax[2].imshow(tmp['mask'][0,...])
+    #     plt.show()
