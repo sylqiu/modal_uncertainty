@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from loaders import LIDC_IDRI
 from vq_models import ResQNet
-from utils import l2_regularisation, AverageMeter, sample_from
+from utils import l2_regularisation, AverageMeter, sample_from, log_loss_dict, CreateFrequencySummarizer, CreateResultSaver
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import os
 from os.path import join as pjoin
@@ -37,6 +37,8 @@ if __name__ == '__main__':
 
     Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
     
+   
+    
 
     # net = torch.nn.DataParallel(cf.net)
     net = cf.net
@@ -61,9 +63,12 @@ if __name__ == '__main__':
 
 
     def train():
+        
         name =  NAME + '_' + date_string 
         save_path = pjoin(base_path, 'models', name)
         image_path = pjoin(base_path, 'images', name)
+        val_result_saver = CreateResultSaver(name=name, base_dir=base_path, token='result_saved')
+        val_frequency_summarizer = CreateFrequencySummarizer(table_size=[cf.epochs,] + cf.frequency_table_size)
 
 
         os.makedirs(image_path, exist_ok=True)
@@ -95,21 +100,17 @@ if __name__ == '__main__':
 
 
 
-        avg_seg_loss = AverageMeter()
-        avg_code_loss = AverageMeter()
-        avg_cls_loss = AverageMeter()
-        avg_sigma = AverageMeter()
-        avg_mu = AverageMeter()
-        if cf.use_focal_loss:
-            avg_focal_loss = AverageMeter()
+        avg_loss = AverageMeter()
+        avg_stat = AverageMeter()
+
+        
 
         ###################################
         # calculate initial codebook sigma
         ###################################
         if cf.data_dependant_qstat:
             logging.info('computing initial quatization statistics')
-            avg_sigma.reset()
-            avg_mu.reset()
+            avg_stat.reset()
             for step, batch in enumerate(train_loader): 
 
                 patch = batch['img'].to(device).type(Tensor)
@@ -122,14 +123,17 @@ if __name__ == '__main__':
                 else:
                     mask = None
 
-                avg_sigma.update(net.posterior_forward(patch, seg).pow(2).mean().pow(0.5).item(), 1)
-                avg_mu.update(net.posterior_forward(patch, seg).mean().item(), 1)
+                avg_stat.update(
+                    {'sigma': net.posterior_forward(patch, seg).pow(2).mean().pow(0.5).item(), 
+                    'mu': net.posterior_forward(patch, seg).mean().item()}
+                )
+             
                 if step % 100 == 0:
-                    logging.info('mean {}, std {}'.format(avg_mu.avg, avg_sigma.avg))
+                    logging.info('mean {}, std {}'.format(avg_stat.avg['mu'], avg_stat.avg['sigma']))
                 if step > 10:
                     break
-            logging.info('initial quantization statistics: mean {}, std {}'.format(avg_mu.avg, avg_sigma.avg))
-            net._init_emb(mu=avg_mu.avg, sigma=avg_sigma.avg*cf.sigma_scale)
+            logging.info('initial quantization statistics: mean {}, std {}'.format(avg_stat.avg['mu'], avg_stat.avg['sigma']))
+            net._init_emb(mu=avg_stat.avg['mu'], sigma=avg_stat.avg['sigma']*cf.sigma_scale)
         else:
             net._init_emb()
 
@@ -137,13 +141,9 @@ if __name__ == '__main__':
         # Training
         ###################################
         for epoch in range(cf.epochs):
-            avg_seg_loss.reset()
-            avg_code_loss.reset()
-            avg_cls_loss.reset()
-            if cf.use_focal_loss:
-                avg_focal_loss.reset()
+            avg_loss.reset()
 
-            if epoch in cf.milestones:
+            if epoch+1 in cf.milestones:
                 logging.info('stepping on {}-th learning rate {}'.format(lr_ct, cf.lr_milestones[lr_ct]))
                 for pg in optimizer.param_groups:
                     pg['lr'] = cf.lr_milestones[lr_ct]
@@ -201,25 +201,11 @@ if __name__ == '__main__':
                 optimizer.step()
 
                 
-                avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
-                avg_code_loss.update(loss_dict['code_loss'].item(), 1)
-                avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
-                if cf.use_focal_loss:
-                    avg_focal_loss.update(loss_dict['seg_loss_focal'].item(), 1)
+                avg_loss.update(loss_dict)
                 
 
-
                 if (step) % 40 == 0:
-                    if cf.use_focal_loss:
-                        logging.info('step {} [seg_loss: {:.4f}/{:.4f}] [focal_loss: {:.4f}/{:.4f}] [code_loss: {:.4f}/{:.4f}] [cls_loss: {:.4f}/{:.4f}] '.format(\
-                            step, avg_seg_loss.val, avg_seg_loss.avg, avg_focal_loss.val, avg_focal_loss.avg, avg_code_loss.val, avg_code_loss.avg,  avg_cls_loss.val, avg_cls_loss.avg,
-                            )
-                        )
-                    else:
-                        logging.info('step {} [seg_loss: {:.4f}/{:.4f}] [code_loss: {:.4f}/{:.4f}] [cls_loss: {:.4f}/{:.4f}] '.format(\
-                            step, avg_seg_loss.val, avg_seg_loss.avg, avg_code_loss.val, avg_code_loss.avg,  avg_cls_loss.val, avg_cls_loss.avg,
-                            )
-                        )
+                    log_loss_dict(step, avg_loss.avg)
                 
                 # break
             code_norm = net.emb.embed.norm(2, dim=0).cpu().numpy()
@@ -234,12 +220,10 @@ if __name__ == '__main__':
 
             #### validation ####
             with torch.no_grad():
-                if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2]:
+                if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2] or epoch+1 % 10 == 0:
                     net.eval()
 
-                    avg_seg_loss.reset()
-                    avg_code_loss.reset()
-                    avg_cls_loss.reset()
+                    avg_loss.reset()
 
                     used_idx = dict()
                     logging.info('validating ...')
@@ -280,25 +264,23 @@ if __name__ == '__main__':
                             else:
                                 tmp = torch.cat([patch, ori_seg, sigmoid_layer(net.recon_seg), sigmoid_layer(sample1), sigmoid_layer(sample2), sigmoid_layer(sample3)], dim=0)
 
+                    
+                        avg_loss.update(loss_dict)
 
-                        save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
-
-                        
-                        avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
-                        avg_code_loss.update(loss_dict['code_loss'].item(), 1)
-                        avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
-
-                        if tstep >= 100 and cf.test_partial:
-                            break
+                        if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2]:
+                            save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
+                            if tstep >= 100 and cf.test_partial:
+                                break
+                        elif cf.use_result_saver:
+                            val_result_saver.append(tstep, scalar_dict=loss_dict)
+                            if cf.use_frequency_summarizer:
+                                val_frequency_summarizer.log_in_table((epoch+1,) + cf.get_item_attribute_idx(batch=batch, primary_code_id=idx1))
                     
         
 
                     del sample1, sample2, sample3, tmp   
 
-                    logging.info('step {} [seg_loss: {:.4f}] [code_loss: {:.4f}] [cls_loss: {:.4f}'.format(\
-                        tstep, avg_seg_loss.avg, avg_code_loss.avg, avg_cls_loss.avg,
-                        )
-                    )
+                    log_loss_dict(tstep, avg_loss.avg)
 
                     logging.info(' quantization usage summary \n ')
                     for key in sorted(used_idx.keys()):
@@ -314,9 +296,14 @@ if __name__ == '__main__':
                 torch.save(net.state_dict(), pjoin(save_path, date_string + '_epoch_%d.pth'%(epoch+1)))
 
             torch.cuda.empty_cache()
+        if cf.use_result_saver:
+            val_result_saver.save_dict_to_numpy()
+        if cf.use_frequency_summarizer:
+            np.save(os.path.join(base_path, name, 'frequency_summary.npy'), val_frequency_summarizer.table)
 
 
     def test():
+        
         with torch.no_grad():
             torch.manual_seed(0)
             check_point = cf.check_point
@@ -325,6 +312,9 @@ if __name__ == '__main__':
             name = 'test_'  + NAME + '_' + date_string
             image_path = pjoin(base_path, 'images', name)
             os.makedirs(image_path, exist_ok=True)
+
+            # test_result_saver = CreateResultSaver(name=name, base_dir=base_path, token='result_saved')
+            test_frequency_summarizer = CreateFrequencySummarizer(table_size=cf.frequency_table_size)
 
             logging.basicConfig(filename=image_path + '/LOG.txt',
                                 filemode='a',
@@ -352,13 +342,8 @@ if __name__ == '__main__':
             logging.info('testing ... \n')
 
             net.eval()
-            avg_seg_loss = AverageMeter()
-            avg_code_loss = AverageMeter()
-            avg_cls_loss = AverageMeter()
+            avg_loss = AverageMeter()
 
-            avg_seg_loss.reset()
-            avg_code_loss.reset()
-            avg_cls_loss.reset()
             for tstep, batch in enumerate(test_loader):
                 # print('validating ...')
                 patch = batch['img'].to(device).type(Tensor)
@@ -377,7 +362,9 @@ if __name__ == '__main__':
                 # print('mask {}'.format(mask))
                 loss_dict = net.loss(seg, mask)
 
-                logging.info('batch #{} \n seg_loss {} \n  code_loss {} \n cls_loss {} \n '.format(tstep, loss_dict['seg_loss'], loss_dict['code_loss'], loss_dict['classification_loss']))
+                avg_loss.update(loss_dict)
+
+                log_loss_dict(tstep, loss_dict)
                 
                 idx = []
                 sample = []
@@ -386,6 +373,8 @@ if __name__ == '__main__':
                 for sample_idx in range(sample_num):
                     if cf.top_k_sample: 
                         sample_tmp, idx_tmp, prob_tmp = net.sample_topk(sample_idx+1)
+                        if sample_idx == 0:
+                            idx1 = idx_tmp
                     else:
                         sample_tmp, idx_tmp, prob_tmp = net.sample()
                     
@@ -406,31 +395,28 @@ if __name__ == '__main__':
                 for item in idx:
                     used_idx[item] = used_idx.get(item, 0) + 1
 
+                if cf.use_frequency_summarizer:
+                    test_frequency_summarizer.log_in_table(cf.get_item_attribute_idx(batch=batch, primary_code_id=idx1))
+
                 if cf.test_partial and tstep > cf.test_partial:
                     break
 
                 
                 cf.save_test(tstep, image_path, batch, patch, ori_seg, net.recon_seg, sample, prob, code_ids, sigmoid_layer)
-        
-                avg_seg_loss.update(loss_dict['seg_loss'].item(), 1)
-                avg_code_loss.update(loss_dict['code_loss'].item(), 1)
-                avg_cls_loss.update(loss_dict['classification_loss'].item(), 1)
 
                 del sample
                 torch.cuda.empty_cache()
                 
             
-                
-            logging.info('step {} [seg_loss: {:.4f}] [code_loss: {:.4f}] [cls_loss: {:.4f}]'.format(\
-                tstep, avg_seg_loss.avg, avg_code_loss.avg, avg_cls_loss.avg,
-                )
-            )
 
             logging.info(' quantization usage summary \n ')
             for key in sorted(used_idx.keys()):
                 logging.info('{} : {}, '.format(key, used_idx[key]),)
 
             logging.info(' dictionary size : {}/{}'.format(len(used_idx), net.num_instance))
+
+        if cf.use_frequency_summarizer:
+            np.save(os.path.join(base_path, name, 'frequency_summary.npy'), test_frequency_summarizer.table)
 
 
 

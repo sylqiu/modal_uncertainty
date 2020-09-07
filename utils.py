@@ -4,6 +4,10 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
+import logging
+import os
+import collections
+from PIL import Image
 
 
 class Normalize(nn.Module):
@@ -45,26 +49,128 @@ def save_mask_prediction_example(mask, pred, iter):
 
 
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-        self.reset()
+  """Computes and stores the average and current value"""
+  def __init__(self):
+    self.reset()
 
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
+  def reset(self):
+    self.val = dict()
+    self.avg = dict()
+    self.sum = dict()
+    self.count = 0
 
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
+  def update(self, val):
+    self.val = val
+    self.count += 1
+    for key in val:
+      self.sum[key] = self.sum.get(key, 0) + val[key].item()
+      self.avg[key] = self.sum[key] / self.count
 
+def log_loss_dict(step, mean_loss_dict):
+  log_str = 'step {} '.format(step)
+  for key in mean_loss_dict:
+    log_str += '[{}] {} '.format(key, mean_loss_dict[key])
+  logging.info(log_str)
+
+
+class CreateFrequencySummarizer():
+    def __init__(self, table_size):
+        
+        self.table_size = table_size
+        self.table = np.zeros(self.table_size) # this is fine if we only use small table size 
+
+    def log_in_table(self, item_attribute_idx):
+        self.table[tuple(item_attribute_idx)] += 1
+
+    def _normalize(self, table, axis=None):
+        if axis==None:
+            return table / np.sum(table)
+        else:
+            return table / np.sum(table, axis=axis)
+
+    def normalize(self):
+        self.table = self._normalize(self.table)
+
+    def retain_axis(self, axis):
+        '''
+        sum over the complmentary axes
+        '''
+        one_hot = [True if tmp in axis else False for tmp in range(self.table_size)]
+        sum_axis = np.array(range(len(self.table_size)))[one_hot]
+        return np.sum(self.table, tuple(sum_axis))
+        
+    def visualize_two_axis(self, axis1, axis2, normalize=True, cmap='viridis'):
+        new_table = self._normalize(self.retain_axis([axis1, axis2]))
+        cm = plt.get_cmap(cmap)
+        new_table_img = Image.fromarray(np.array(cm(new_table)[...,:3]))
+        new_table_img = new_table_img.resize((self.table_size[axis1]*2, self.table_size[axis2]*2), Image.NEAREST)
+        return new_table, new_table_img
+
+    
+
+
+class CreateResultSaver(object):
+    '''
+    save scalars, and tensors into numpy 
+    save images into png
+    '''
+    def __init__(self, name, base_dir, token, cmap='viridis'):
+        
+        self.name = name
+        self.parent_path = os.path.join(base_dir, name, token)
+        self.image_path = os.path.join(base_dir, name, token, 'images')
+        self.quant_path = os.path.join(base_dir, name, token, 'quant')
+        os.makedirs(self.parent_path, exist_ok=True)
+        os.makedirs(self.image_path, exist_ok=True)
+        os.makedirs(self.quant_path, exist_ok=True)
+        self.scalar_dict = collections.defaultdict(list)
+        self.tensor_dict = collections.defaultdict(list)
+        self.cmap = plt.get_cmap(cmap)
+        
+
+    def write_image(self, step, image_dict):
+        img_save = []
+        dict_len = len(image_dict)
+        for key, value in image_dict.items():
+            img_array = []
+            value = value.numpy()
+            bdim = value.shape[0]
+            for i in range(bdim):
+                img = value[i]
+                if img.shape[-1] == 1:
+                    img = img[...,0]
+                    img = self.cmap(img)[...,:3] # only get the RGB
+                elif img.shape[-1] == 3:
+                    img = img
+                else:
+                    raise NotImplementedError
+                
+                # pad the image only when there are mutiple images to save
+                if dict_len > 1 or bdim > 1:
+                    img = np.pad(img, ((3, 3), (3, 3), (0, 0)))
+                # print(img.shape)
+                img_array.append(img)
+            img_array = np.concatenate(img_array, axis=1)
+            img_save.append(img_array)
+        
+        img_save = np.concatenate(img_save, axis=0)
+        plt.imsave(os.path.join(self.image_path, '{}.png'.format(step)), img_save)
+
+    def append(self, step, scalar_dict=None, tensor_dict=None):
+        if scalar_dict is not None:
+            for key, value in scalar_dict.items():
+                self.scalar_dict[key].append(value.numpy())
+        if tensor_dict is not None:
+            for key, value in tensor_dict.items():
+                self.tensor_dict[key].append(value.numpy())
+    
+    def save_dict_to_numpy(self):
+        if bool(self.scalar_dict):
+            for key, value in self.scalar_dict:
+                np.save(os.path.join(self.quant_path, key+'_scalar.npy'), np.stack(value))
+        if bool(self.tensor_dict):
+            for key, value in self.tensor_dict:
+                np.save(os.path.join(self.quant_path, key+'_tensor.npy'), np.stack(value))
 
 
 def sobel(window_size):

@@ -15,6 +15,8 @@ num_classifier_filters = [128, 128]
 num_instance = 512
 num_feature_channels = 64
 posterior_layer = -1
+
+
 use_focal_loss = False
 if use_focal_loss:
     focal_weight = 1
@@ -61,6 +63,11 @@ else:
 test_dataset = MixMNIST(path_base = data_path_base, list_id='test')
 test_partial = 100
 
+use_result_saver = True
+use_frequency_summarizer = True
+frequency_table_size=[num_instance, train_dataset.num_gt_modes]
+def get_item_attribute_idx(batch, primary_code_id):
+    return (primary_code_id, batch['mode_id'])
 
 def save_test(tstep, image_path, batch, patch, ori_seg, recon_seg, sample, prob, code_ids, sigmoid_layer):
     if 'img_key' in batch.keys():

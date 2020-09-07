@@ -7,6 +7,9 @@ from importlib.machinery import SourceFileLoader
 import logging
 import pickle
 import imp
+import matplotlib.pyplot as plt
+from PIL import Image
+import collections
 
 
 
@@ -400,6 +403,9 @@ def eval_LIDC(cf, file_list, data_loader, queue=None):
         return results
 
 
+
+#### parallel running ####
+
 def runInParallel(fns_args, queue):
     """Run functions in parallel.
     :param fns_args: list of tuples containing functions and a tuple of arguments each
@@ -569,46 +575,6 @@ def calc_confusion(labels, samples, class_ixs, loss_mask=None):
 
     return conf_matrix
 
-# def calc_confusion(labels, samples, class_ixs, loss_mask=None):
-#     """
-#     Compute confusion matrix for each class across the given arrays.
-#     Assumes classes are given in integer-valued encoding.
-#     :param labels: 4/5D array (1, num_class, h, w)
-#     :param samples: 4/5D array
-#     :param class_ixs: integer or list of integers specifying the classes to evaluate
-#     :param loss_mask: 4/5D array
-#     :return: 2D array
-#     """
-#     try:
-#         assert labels.shape == samples.shape
-#     except:
-#         raise AssertionError('shape mismatch {} vs. {}'.format(labels.shape, samples.shape))
-
-#     if isinstance(class_ixs, int):
-#         num_classes = class_ixs
-#         class_ixs = range(class_ixs)
-#     elif isinstance(class_ixs, list):
-#         num_classes = len(class_ixs)
-#     else:
-#         raise TypeError('arg class_ixs needs to be int or list, not {}.'.format(type(class_ixs)))
-
-#     if loss_mask is None:
-#         shp = labels.shape
-#         loss_mask = np.zeros(shape=(shp[0], 1, shp[2], shp[3]))
-
-#     conf_matrix = np.zeros(shape=(num_classes, 4), dtype=np.float32)
-#     for i,c in enumerate(class_ixs):
-
-#         pred_ = (samples == c).astype(np.uint8)
-#         labels_ = (labels == c).astype(np.uint8)
-
-#         conf_matrix[i,0] = int(((pred_ != 0) * (labels_ != 0) * (loss_mask != 1)).sum()) # TP
-#         conf_matrix[i,1] = int(((pred_ != 0) * (labels_ == 0) * (loss_mask != 1)).sum()) # FP
-#         conf_matrix[i,2] = int(((pred_ == 0) * (labels_ == 0) * (loss_mask != 1)).sum()) # TN
-#         conf_matrix[i,3] = int(((pred_ == 0) * (labels_ != 0) * (loss_mask != 1)).sum()) # FN
-
-#     return conf_matrix
-
 
 def metrics_from_conf_matrix(conf_matrix):
     """
@@ -633,6 +599,7 @@ def metrics_from_conf_matrix(conf_matrix):
             # metrics['iou'][c] = np.nan
 
     return metrics
+
 
 
 if __name__ == '__main__':
