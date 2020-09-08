@@ -5,7 +5,7 @@ import torch, torchvision
 from torchvision.utils import save_image
 import numpy as np
 
-NAME = 'MixMNIST'
+NAME = 'MixPosMNIST'
 use_sigmoid = True
 save_base_path = '/lustre/project/RonaldLui/Syl/project/prob_reg/'
 input_channels = 1
@@ -47,8 +47,8 @@ if resume_training:
     resume_check_point = ''
 
 data_path_base = '/lustre/project/RonaldLui/MNIST/'
-train_dataset = MixMNIST(path_base = data_path_base, list_id='train')
-val_dataset = MixMNIST(path_base = data_path_base, list_id='test')
+train_dataset = MixPosMNIST(path_base = data_path_base, list_id='train')
+val_dataset = MixPosMNIST(path_base = data_path_base, list_id='test')
 
 # for testing #
 check_point = 'models/MixMNIST_07_10_2020_19_12/07_10_2020_19_12_epoch_current.pth'
@@ -60,7 +60,7 @@ if save_test_npy:
     test_bs = 1
 else:
     test_bs = 10
-test_dataset = MixMNIST(path_base = data_path_base, list_id='test')
+test_dataset = MixPosMNIST(path_base = data_path_base, list_id='test')
 test_partial = 100
 
 use_result_saver = True

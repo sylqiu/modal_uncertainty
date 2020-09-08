@@ -416,7 +416,7 @@ if __name__ == '__main__':
             logging.info(' dictionary size : {}/{}'.format(len(used_idx), net.num_instance))
 
         if cf.use_frequency_summarizer:
-            np.save(os.path.join(base_path, name, 'frequency_summary.npy'), test_frequency_summarizer.table)
+            np.save(os.path.join(image_path, 'frequency_summary.npy'), test_frequency_summarizer.table)
 
 
 
