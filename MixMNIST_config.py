@@ -65,7 +65,7 @@ test_partial = 100
 
 use_result_saver = True
 use_frequency_summarizer = True
-frequency_table_size=[num_instance, train_dataset.num_gt_modes]
+frequency_table_size=[num_instance, train_dataset.num_gt_modes()]
 def get_item_attribute_idx(batch, primary_code_id):
     return (primary_code_id, batch['mode_id'])
 
