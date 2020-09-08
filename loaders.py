@@ -466,7 +466,7 @@ class MixPosMNIST(Dataset):
         # torch.manual_seed(0)
         # torch.cuda.manual_seed(0)
         # np.random.seed(0)
-        self.input_shape = [96, 96, 1]
+        self.input_shape = [96, 96]
 
     def __len__(self):
         return self.length
@@ -556,9 +556,9 @@ class MixPosMNIST(Dataset):
 
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
     # dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape', random_switch=True,random_crop_size=[256, 256], random_ratio=[0.8, 1.25], random_flip=True, random_rotate=[-15, 15], gamma=[0.7,1.5])
-    dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape', 'val')
+    # dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape', 'val')
     
     # for i in range(10):
     #     fig, ax = plt.subplots(1, 3)
@@ -597,13 +597,14 @@ if __name__ == '__main__':
     #     print(data['img'].max())
     #     plt.show()
 
-    # dataset = KittiMonoDepth('/home/syl/Documents/Project/prob_reg/dataset/KITTI/', list_id='train',random_crop_size=[140, 160], random_ratio=[0.8, 1.25], random_flip=True, random_rotate=[-5, 5], gamma=[0.9,1.2])
-    # # dataset = CityScapeSwitch('/home/syl/Documents/Project/prob_reg/dataset/cityscape')
-    
-    # for i in range(10):
-    #     fig, ax = plt.subplots(1, 3)
-    #     tmp = dataset[33583]  
-    #     ax[0].imshow(tmp['img'].transpose(1, 2, 0))
-    #     ax[1].imshow(tmp['seg'][0,...])
-    #     ax[2].imshow(tmp['mask'][0,...])
+    # dataset = MixPosMNIST('/content/gdrive/My Drive/MNIST', 'test')
+    # data_loader = DataLoader(dataset, batch_size=1, shuffle=False,
+    #         num_workers=1, pin_memory=True, sampler=None, worker_init_fn= lambda _: torch.manual_seed(0))
+    # for i, data in enumerate(data_loader):
+        
+    #     print(data['img_key'])
+    #     fig, ax = plt.subplots(1,2)
+    #     ax[0].imshow(data['img'][0,0,...])
+    #     ax[1].imshow(data['seg'][0,0,...])
+    #     print(data['img'].max())
     #     plt.show()
