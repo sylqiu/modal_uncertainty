@@ -466,7 +466,7 @@ class MixPosMNIST(Dataset):
         # torch.manual_seed(0)
         # torch.cuda.manual_seed(0)
         # np.random.seed(0)
-        self.input_shape = [96, 96]
+        self.input_shape = [28*2, 28*2]
 
     def __len__(self):
         return self.length
@@ -484,6 +484,22 @@ class MixPosMNIST(Dataset):
         w_p = torch.randint(0, self.input_shape[1]-28+1, (1,)).item()
         return h_p, w_p
 
+    def random_sample_top_left_corner_restricted(self, pos):
+        if pos == 0:
+            h_p = 0
+            w_p = 0
+        if pos == 1:
+            h_p = 28
+            w_p = 0
+        if pos == 2:
+            h_p = 0
+            w_p = 28
+        if pos == 3:
+            h_p = 28
+            w_p = 28
+
+        return h_p, w_p
+
     def embed_in_pos(self, img, h_p, w_p):
         result = np.zeros(self.input_shape)
         result[h_p:h_p + 28, w_p:w_p+28] = img
@@ -496,10 +512,12 @@ class MixPosMNIST(Dataset):
         ps = []
         
         assert seg_id in range(4)
+        pos = torch.randperm(4)
         for i in range(4):
 
             tmp, tmp_idx = self.random_sample_from_label(labels[i])
-            tmp_hp, tmp_wp = self.random_sample_top_left_corner()
+            # tmp_hp, tmp_wp = self.random_sample_top_left_corner()
+            tmp_hp, tmp_wp = self.random_sample_top_left_corner_restricted(pos[i])
             tmp = self.embed_in_pos(tmp, tmp_hp, tmp_wp)
             img += tmp
             idxs.append(tmp_idx)
@@ -548,6 +566,7 @@ class MixPosMNIST(Dataset):
             ))
             
             segs.append(seg[None,...]/255.)
+            j += 1
                
 
         return np.concatenate(segs, axis=0)
