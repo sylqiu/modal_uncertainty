@@ -65,8 +65,8 @@ if __name__ == '__main__':
     def train():
         
         name =  NAME + '_' + date_string 
-        save_path = pjoin(base_path, 'models', name)
-        image_path = pjoin(base_path, 'images', name)
+        save_path = pjoin(base_path, name, 'models')
+        image_path = pjoin(base_path,  name, 'images')
         val_result_saver = CreateResultSaver(name=name, base_dir=base_path, token='result_saved')
         val_frequency_summarizer = CreateFrequencySummarizer(table_size=[cf.epochs,] + cf.frequency_table_size)
 
@@ -124,8 +124,8 @@ if __name__ == '__main__':
                     mask = None
 
                 avg_stat.update(
-                    {'sigma': net.posterior_forward(patch, seg).pow(2).mean().pow(0.5).item(), 
-                    'mu': net.posterior_forward(patch, seg).mean().item()}
+                    {'sigma': net.posterior_forward(patch, seg).pow(2).mean().pow(0.5), 
+                    'mu': net.posterior_forward(patch, seg).mean()}
                 )
              
                 if step % 100 == 0:
@@ -220,7 +220,7 @@ if __name__ == '__main__':
 
             #### validation ####
             with torch.no_grad():
-                if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2] or epoch+1 % 10 == 0:
+                if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2] or (epoch+1) % 10 == 0:
                     net.eval()
 
                     avg_loss.reset()
@@ -267,14 +267,15 @@ if __name__ == '__main__':
                     
                         avg_loss.update(loss_dict)
 
-                        if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2]:
-                            save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
-                            if tstep >= 100 and cf.test_partial:
-                                break
-                        elif cf.use_result_saver:
-                            val_result_saver.append(tstep, scalar_dict=loss_dict)
-                            if cf.use_frequency_summarizer:
-                                val_frequency_summarizer.log_in_table((epoch+1,) + cf.get_item_attribute_idx(batch=batch, primary_code_id=idx1))
+                        # if (epoch+1) in cf.milestones + [cf.epochs] or epoch in [0, 2]:
+                        save_image(tmp.data, pjoin(image_path, "%d.png" % tstep), nrow=cf.val_bs, normalize=False)
+                        if tstep >= 100 and cf.test_partial:
+                            break
+                            
+                        if cf.use_result_saver and (epoch+1) % 10 == 0:
+                          val_result_saver.append(tstep, scalar_dict=loss_dict)
+                        if cf.use_frequency_summarizer and (epoch+1) % 10 == 0:
+                            val_frequency_summarizer.log_in_table((epoch+1,) + cf.get_item_attribute_idx(batch=batch, primary_code_id=idx1))
                     
         
 
@@ -310,7 +311,7 @@ if __name__ == '__main__':
             sample_num = cf.sample_num
 
             name = 'test_'  + NAME + '_' + date_string
-            image_path = pjoin(base_path, 'images', name)
+            image_path = pjoin(base_path, name, 'images')
             os.makedirs(image_path, exist_ok=True)
 
             # test_result_saver = CreateResultSaver(name=name, base_dir=base_path, token='result_saved')

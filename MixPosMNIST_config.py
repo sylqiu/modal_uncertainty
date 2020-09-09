@@ -1,4 +1,4 @@
-from loaders import MixMNIST
+from loaders import MixPosMNIST
 from vq_models import ResQNet
 from os.path import join as pjoin
 import torch, torchvision
@@ -7,19 +7,20 @@ import numpy as np
 
 NAME = 'MixPosMNIST'
 use_sigmoid = True
-save_base_path = '/lustre/project/RonaldLui/Syl/project/prob_reg/'
+save_base_path = '/content/gdrive/My Drive/modal_uncertainty-torch/test'
 input_channels = 1
 output_channels = 1
-num_filters = [16, 32, 64, 128]
-num_classifier_filters = [128, 128]
+num_filters = [32, 64, 128, 128, 128]
+num_classifier_filters = [256, 256]
 num_instance = 512
-num_feature_channels = 64
+num_feature_channels = 128
 posterior_layer = -1
 
 
 use_focal_loss = False
 if use_focal_loss:
     focal_weight = 1
+use_l1loss = False 
 
 data_dependant_qstat = True
 if data_dependant_qstat:
@@ -36,9 +37,9 @@ net = ResQNet(input_channels=input_channels, output_channels=output_channels, \
 train_bs = 256
 val_bs = 10
 epochs = 250
-milestones = [0, 100, 100, 150]
-lr_milestones = [1e-4, 5e-5, 1e-5, 5e-6]
-warm_up_epochs = 50
+milestones = [0, 100, 150, 200]
+lr_milestones = [1e-4, 3e-5, 1e-5, 3e-6]
+warm_up_epochs = 30
 beta = 0.25
 lr_decay = 0.3
 
@@ -46,12 +47,12 @@ resume_training = False
 if resume_training:
     resume_check_point = ''
 
-data_path_base = '/lustre/project/RonaldLui/MNIST/'
+data_path_base = '/content/gdrive/My Drive/MNIST'
 train_dataset = MixPosMNIST(path_base = data_path_base, list_id='train')
 val_dataset = MixPosMNIST(path_base = data_path_base, list_id='test')
 
 # for testing #
-check_point = 'models/MixMNIST_07_10_2020_19_12/07_10_2020_19_12_epoch_current.pth'
+check_point = ''
 sample_num = 11
 top_k_sample = True
 
@@ -64,7 +65,7 @@ test_dataset = MixPosMNIST(path_base = data_path_base, list_id='test')
 test_partial = 100
 
 use_result_saver = True
-use_frequency_summarizer = True
+use_frequency_summarizer = False
 frequency_table_size=[num_instance, train_dataset.num_gt_modes()]
 def get_item_attribute_idx(batch, primary_code_id):
     return (primary_code_id, batch['mode_id'])

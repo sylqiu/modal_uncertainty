@@ -20,6 +20,7 @@ posterior_layer = -1
 use_focal_loss = False
 if use_focal_loss:
     focal_weight = 1
+use_l1loss = False
 
 data_dependant_qstat = True
 if data_dependant_qstat:
@@ -36,7 +37,7 @@ net = ResQNet(input_channels=input_channels, output_channels=output_channels, \
 train_bs = 256
 val_bs = 10
 epochs = 250
-milestones = [0, 100, 100, 150]
+milestones = [0, 100, 150, 200]
 lr_milestones = [1e-4, 5e-5, 1e-5, 5e-6]
 warm_up_epochs = 50
 beta = 0.25
