@@ -33,7 +33,13 @@ class QuantizeEMA(nn.Module):
             + self.embed.pow(2).sum(0, keepdim=True)
         )
         _, embed_ind = (-dist).max(1)
-        embed_onehot = F.one_hot(embed_ind, self.n_embed).type(flatten.dtype)
+
+
+        # embed_onehot = F.one_hot(embed_ind, self.n_embed).type(flatten.dtype)
+        embed_onehot = torch.zeros((len(embed_ind), self.n_embed)).cuda()
+        for i in range(0, len(embed_ind)):
+            embed_onehot[i, embed_ind[i]] = 1
+
         embed_ind = embed_ind.view(*input.shape[:-1])
         quantize = self.embed_code(embed_ind)
 

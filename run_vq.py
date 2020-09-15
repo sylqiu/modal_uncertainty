@@ -70,7 +70,6 @@ if __name__ == '__main__':
         val_result_saver = CreateResultSaver(name=name, base_dir=base_path, token='result_saved')
         val_frequency_summarizer = CreateFrequencySummarizer(table_size=[cf.epochs,] + cf.frequency_table_size)
 
-
         os.makedirs(image_path, exist_ok=True)
         os.makedirs(save_path, exist_ok=True)
 
@@ -78,6 +77,12 @@ if __name__ == '__main__':
                             filemode='a',
                             level=logging.INFO)
         logging.getLogger().addHandler(logging.StreamHandler())
+
+        logging.info('==========================================================')
+        logging.info('save path: {0} \n arguments: epochs={1}, lr_milestones={2}, epochs_milestones={3}, warmup_epochs={4}, posterior_layer={5}'
+                     .format(save_path, cf.epochs, cf.lr_milestones, cf.milestones, cf.warm_up_epochs, cf.posterior_layer))
+        logging.info('==========================================================')
+
         logging.info('-------------------------------')
         with open(opt.config + '_config.py', "r") as f:
             logging.info(f.read())

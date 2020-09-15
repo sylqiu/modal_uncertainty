@@ -7,7 +7,7 @@ import numpy as np
 
 NAME = 'MixPosMNIST'
 use_sigmoid = True
-save_base_path = '/content/gdrive/My Drive/modal_uncertainty-torch/test'
+save_base_path = './results'
 input_channels = 1
 output_channels = 1
 num_filters = [32, 64, 128, 128, 128]
@@ -47,7 +47,7 @@ resume_training = False
 if resume_training:
     resume_check_point = ''
 
-data_path_base = '/content/gdrive/My Drive/MNIST'
+data_path_base = './dataset/MNIST'
 train_dataset = MixPosMNIST(path_base = data_path_base, list_id='train')
 val_dataset = MixPosMNIST(path_base = data_path_base, list_id='test')
 
