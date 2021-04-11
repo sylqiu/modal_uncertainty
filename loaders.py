@@ -14,9 +14,68 @@ from collections import OrderedDict,defaultdict
 from cityscapes_labels import labels as cs_labels_tuple
 import matplotlib.pyplot as plt
 import random
+import scipy.io as sio
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+class DeformRandom(Dataset):
+    def __init__(self, path_base, list_id='train'):
+        if list_id == 'train':
+            self.input_data = sio.loadmat(
+                pjoin(path_base, 'training', 'input_mu_data.mat')
+            )['input_mu_data']
+            self.gt_data = sio.loadmat(
+                pjoin(path_base, 'training', 'gt_mu_data.mat')
+            )['gt_mu_data']
+            print('=> Training dataset contains %d images' % self.input_data.shape[0])
+
+        if list_id == 'val':
+            self.input_data = sio.loadmat(
+                pjoin(path_base, 'testing', 'input_mu_data.mat')
+            )['input_mu_data']
+            self.gt_data = sio.loadmat(
+                pjoin(path_base, 'testing', 'gt_mu_data.mat')
+            )['gt_mu_data']
+            print('=> Validation dataset contains %d images' % self.input_data.shape[0])
+
+        if list_id == 'test':
+            self.input_data = sio.loadmat(
+                pjoin(path_base, 'testing', 'input_mu_data.mat')
+            )['input_mu_data']
+            self.gt_data = sio.loadmat(
+                pjoin(path_base, 'testing', 'gt_mu_data.mat')
+            )['gt_mu_data']
+            print('=> Testing dataset contains %d images' % self.input_data.shape[0])
+
+    def __len__(self):
+        return self.input_data.shape[0]
+
+    def num_gt_modes(self):
+        return None
+
+    def set_idx2(self, idx2):
+        self.idx2 = idx2
+
+    def __getitem__(self, idx):
+        if self.idx2 == None:
+            img = self.input_data[idx]
+            seg = self.gt_data[idx]
+            return {'img': img, 'seg' : seg, 'seg_id':0}
+        elif isinstance(self.idx2, int):
+            img = self.input_data[idx]
+            seg = self.gt_data[idx, self.idx2]
+            return {'img': img, 'seg' : seg, 'img_key':idx}
+
+    def get_gt_modes(self, img_key):
+        seg_modes = np.zeros([20, 50, 50])
+        for i in range(20):
+            seg_modes[i, ...] = self.gt_data[img_key, i]
+
+        img = self.gt_data[img_key]
+        
+        return {'gt_modes': seg_modes, 'img' : img[None, ...]}
+
+    
 # random.seed(0)
 class LIDC_IDRI(Dataset):
     def __init__(self, path_base, list_id='train', random_crop_size=None, random_ratio=None, random_flip=False, random_rotate=False):
@@ -124,9 +183,6 @@ class LIDC_IDRI(Dataset):
             seg = np.array(x['seg'])[None, ...]/ 255.
 
             return {'img':img, 'seg':seg, 'img_key':self.data_list[idx]}
-
-
-
 
     def get_gt_modes(self, img_key):
         seg_modes = np.zeros([4, 180, 180])
